@@ -14,7 +14,8 @@ enum HeroType {
 }
 
 enum MoveType {
-	WAIT("WAIT"), MOVE("MOVE"), ATTACK_ID("ATTACK"), ATTACK_NEAREST("ATTACK_NEAREST"), MOVE_ATTACK("MOVE_ATTACK");
+	WAIT("WAIT"), MOVE("MOVE"), ATTACK_ID("ATTACK"), ATTACK_NEAREST("ATTACK_NEAREST"), MOVE_ATTACK("MOVE_ATTACK"), BUY(
+			"BUY"), SELL("SELL");
 
 	final private String command;
 
@@ -37,7 +38,8 @@ class Global {
 	int heroMovesLeft = 0;
 	Team myTeam = new Team();
 	Team hisTeam = new Team();
-	Map<Integer, Character> charactersById = new HashMap<>();
+	Map<Integer, Entity> entitiesById = new HashMap<>();
+	List<Item> items = new ArrayList<>();
 
 	List<Bush> bushes = new ArrayList<>();
 	List<Spawn> spawns = new ArrayList<>();
@@ -45,8 +47,9 @@ class Global {
 	public void updateHero(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
 			int attackDamage, int movementSpeed, int mana, int maxMana, int manaRegeneration, String heroType,
 			int isVisible) {
-		if (charactersById.containsKey(id)) {
-			charactersById.get(id).update(maxMana, y, maxHealth, isVisible);
+		if (entitiesById.containsKey(id)) {
+			Hero hero = (Hero) entitiesById.get(id);
+			hero.update(maxMana, y, maxHealth, manaRegeneration, isVisible);
 		} else {
 			addNewHero(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, mana, maxMana,
 					manaRegeneration, heroType, isVisible);
@@ -60,7 +63,7 @@ class Global {
 		Hero newHero = new Hero(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, mana,
 				maxMana, manaRegeneration, heroType, isVisible);
 		// Add to global character map
-		charactersById.put(id, newHero);
+		entitiesById.put(id, newHero);
 
 		// Add to team
 		if (myTeam.teamId == teamId) {
@@ -68,6 +71,12 @@ class Global {
 		} else {
 			hisTeam.heros.add(newHero);
 		}
+	}
+
+	public void addItem(String itemName, int itemCost, int damage, int health, int maxHealth, int mana, int maxMana,
+			int moveSpeed, int manaRegeneration, int isPotion) {
+		items.add(new Item(itemName, itemCost, damage, health, maxHealth, mana, maxMana, moveSpeed, manaRegeneration,
+				isPotion));
 	}
 }
 
@@ -97,11 +106,27 @@ class Item {
 	int maxMana;
 	int moveSpeed;
 	int manaRegeneration;
-	int isPotion;
+	boolean isPotion;
+
+	public Item(String itemName, int itemCost, int damage, int health, int maxHealth, int mana, int maxMana,
+			int moveSpeed, int manaRegeneration, int isPotion) {
+		this.itemName = itemName;
+		this.itemCost = itemCost;
+		this.damage = damage;
+		this.health = health;
+		this.maxHealth = maxHealth;
+		this.mana = mana;
+		this.maxMana = maxMana;
+		this.moveSpeed = moveSpeed;
+		this.manaRegeneration = manaRegeneration;
+		this.isPotion = isPotion == 1;
+	}
+
 }
 
-abstract class Character {
+abstract class Entity {
 	final int id;
+	final UnitType entityType;
 	final int teamId;
 	final int attackRange;
 	final int maxHealth;
@@ -109,47 +134,47 @@ abstract class Character {
 	final int movementSpeed;
 	Position position = new Position(-1, -1);
 	int health;
-	boolean isVisible;
 
-	protected Character(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
-			int movementSpeed, int isVisible) {
+	protected Entity(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
+			int movementSpeed, UnitType entityType) {
 		// Init Character final values
 		this.id = id;
 		this.teamId = teamId;
+		this.entityType = entityType;
 		this.attackRange = attackRange;
 		this.maxHealth = maxHealth;
 		this.attackDamage = attackDamage;
 		this.movementSpeed = movementSpeed;
 
 		// Init Character variable values
-		update(x, y, health, isVisible);
+		update(x, y, health);
 	}
 
-	protected void update(int x, int y, int health, int isVisible) {
+	protected void update(int x, int y, int health) {
 		this.position.x = x;
 		this.position.y = y;
-		this.isVisible = isVisible == 0;
 		this.health = health;
 	}
 }
 
-class Unit extends Character {
+class Unit extends Entity {
 
 	protected Unit(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
-			int movementSpeed, int isVisible) {
-		super(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, isVisible);
+			int movementSpeed) {
+		super(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, UnitType.UNIT);
 	}
 
 }
 
-class Hero extends Character {
+class Hero extends Entity {
 	HeroType heroType;
 	final int maxMana;
 	int mana;
+	boolean isVisible;
 
 	protected Hero(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
 			int movementSpeed, int mana, int maxMana, int manaRegeneration, String heroType, int isVisible) {
-		super(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, isVisible);
+		super(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, UnitType.HERO);
 		this.heroType = HeroType.valueOf(heroType);
 		this.maxMana = maxMana;
 
@@ -157,8 +182,9 @@ class Hero extends Character {
 	}
 
 	public void update(int x, int y, int health, int mana, int isVisible) {
-		super.update(x, y, health, isVisible);
+		super.update(x, y, health);
 		this.mana = mana;
+		this.isVisible = isVisible == 1;
 	}
 }
 
@@ -211,6 +237,7 @@ class Move {
 	Position position = new Position(-1, -1);
 	int unitId = -1;
 	UnitType unitType = null;
+	String itemName = null;
 
 	String msgToPrint = null;
 
@@ -262,6 +289,20 @@ class Move {
 		return buildMoveAttackMove(position.x, position.y, unitId);
 	}
 
+	public static Move buildMoveBuy(String itemName) {
+		Move move = new Move();
+		move.moveType = MoveType.BUY;
+		move.itemName = itemName;
+		return move;
+	}
+
+	public static Move buildMoveSell(String itemName) {
+		Move move = new Move();
+		move.moveType = MoveType.SELL;
+		move.itemName = itemName;
+		return move;
+	}
+
 	public void addMessage(String msg) {
 		if (this.msgToPrint == null) {
 			msgToPrint = msg;
@@ -296,6 +337,14 @@ class Move {
 
 		case MOVE_ATTACK:
 			command = command + " " + position.x + " " + position.y + " " + unitId;
+			break;
+
+		case BUY:
+			command = command + " " + itemName;
+			break;
+
+		case SELL:
+			command = command + " " + itemName;
 			break;
 
 		default:
@@ -362,6 +411,9 @@ class Player {
 			int moveSpeed = in.nextInt(); // keyword BOOTS is present if the most important item stat is moveSpeed
 			int manaRegeneration = in.nextInt();
 			int isPotion = in.nextInt(); // 0 if it's not instantly consumed
+
+			g.addItem(itemName, itemCost, damage, health, maxHealth, mana, maxMana, moveSpeed, manaRegeneration,
+					isPotion);
 		}
 
 		// game loop
