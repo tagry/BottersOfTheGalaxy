@@ -1,8 +1,10 @@
+import java.io.StreamCorruptedException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.stream.Collectors;
 
 enum UnitType {
 	UNIT, HERO, TOWER, GROOT
@@ -44,6 +46,68 @@ class Global {
 	List<Bush> bushes = new ArrayList<>();
 	List<Spawn> spawns = new ArrayList<>();
 
+	public void initEntities() {
+		for (Entity entity : entitiesById.values()) {
+			entity.isAlive = false;
+		}
+	}
+
+	public void purgeEntities() {
+		List<Integer> listEntitiesToBeRemoved = new ArrayList<>();
+
+		// Find dead entities
+		for (Entity entity : entitiesById.values()) {
+			if (!entity.isAlive) {
+				listEntitiesToBeRemoved.add(entity.id);
+			}
+		}
+
+		// Purge entities
+		for (Integer idToBeRemoved : listEntitiesToBeRemoved) {
+			entitiesById.remove(idToBeRemoved);
+		}
+	}
+
+	public void updateTower(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
+			int attackDamage, int movementSpeed) {
+		if (entitiesById.containsKey(id)) {
+			Tower tower = (Tower) entitiesById.get(id);
+			tower.update(x, y, health);
+		} else {
+			initTower(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
+		}
+	}
+
+	private void initTower(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
+			int attackDamage, int movementSpeed) {
+		Tower newTower = new Tower(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
+
+		// Add to global entities map
+		entitiesById.put(id, newTower);
+
+		// Add to team
+		if (myTeam.teamId == teamId) {
+			myTeam.tower = newTower;
+		} else {
+			hisTeam.tower = newTower;
+		}
+	}
+
+	public void updateUnit(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
+			int attackDamage, int movementSpeed) {
+		Unit newUnit = new Unit(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
+
+		// Add to global entities map
+		entitiesById.put(id, newUnit);
+
+		// Add to team
+		if (myTeam.teamId == teamId) {
+			myTeam.units.add(newUnit);
+		} else {
+			hisTeam.units.add(newUnit);
+		}
+	}
+
 	public void updateHero(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
 			int attackDamage, int movementSpeed, int mana, int maxMana, int manaRegeneration, String heroType,
 			int isVisible) {
@@ -62,7 +126,7 @@ class Global {
 			int isVisible) {
 		Hero newHero = new Hero(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, mana,
 				maxMana, manaRegeneration, heroType, isVisible);
-		// Add to global character map
+		// Add to global entities map
 		entitiesById.put(id, newHero);
 
 		// Add to team
@@ -81,6 +145,9 @@ class Global {
 }
 
 class Position {
+	static final int MAX_X = 1920;
+	static final int MAX_Y = 750;
+
 	int x;
 	int y;
 
@@ -88,12 +155,52 @@ class Position {
 		this.x = x;
 		this.y = y;
 	}
+
+	/**
+	 * Return the position in front of position by distance depend of the team
+	 * 
+	 * @param distance
+	 * @team team
+	 * @return
+	 */
+	public Position frontPosition(int distance, Team team) {
+		Position frontPosition = new Position(x, y);
+
+		if (team.tower.position.x > MAX_X / 2) {
+			frontPosition.x = Math.min(0, x - distance);
+		} else {
+			frontPosition.x = Math.max(MAX_X, x + distance);
+		}
+
+		return frontPosition;
+	}
+
+	/**
+	 * Return the position in behind of position by distance depend of the team
+	 * 
+	 * @param distance
+	 * @team team
+	 * @return
+	 */
+	public Position behindPosition(int distance, Team team) {
+		Position behindPosition = new Position(x, y);
+
+		if (team.tower.position.x < MAX_X / 2) {
+			behindPosition.x = Math.min(0, x - distance);
+		} else {
+			behindPosition.x = Math.max(MAX_X, distance - x);
+		}
+
+		return behindPosition;
+	}
 }
 
 class Team {
 	int teamId;
 	int gold;
 	List<Hero> heros = new ArrayList<>();
+	List<Unit> units = new ArrayList<>();
+	Tower tower;
 }
 
 class Item {
@@ -124,7 +231,11 @@ class Item {
 
 }
 
-abstract class Entity {
+abstract class MapObject {
+	Position position = new Position(-1, -1);
+}
+
+abstract class Entity extends MapObject {
 	final int id;
 	final UnitType entityType;
 	final int teamId;
@@ -132,8 +243,8 @@ abstract class Entity {
 	final int maxHealth;
 	final int attackDamage;
 	final int movementSpeed;
-	Position position = new Position(-1, -1);
 	int health;
+	boolean isAlive;
 
 	protected Entity(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
 			int movementSpeed, UnitType entityType) {
@@ -154,12 +265,81 @@ abstract class Entity {
 		this.position.x = x;
 		this.position.y = y;
 		this.health = health;
+
+		if (health > 0) {
+			isAlive = true;
+		}
 	}
+
+	/**
+	 * return true if this can attack entity without moving
+	 * 
+	 * @param entity
+	 */
+	public boolean canAttack(Entity entity) {
+		return distance(entity) < attackRange;
+	}
+
+	/**
+	 * Return the list of attackable entities without moving
+	 * 
+	 * @return
+	 */
+	public List<Entity> getAttackableEntities(Global g) {
+		List<Entity> attackableEntities = new ArrayList<>();
+
+		for (Entity entity : g.entitiesById.values()) {
+			if (this.id != entity.id && this.canAttack(entity)) {
+				attackableEntities.add(entity);
+			}
+		}
+
+		return attackableEntities;
+	}
+
+	/**
+	 * Return the list of enemy (NOT neutral) entity attackable without moving
+	 * 
+	 * @param g
+	 * @return
+	 */
+	public List<Entity> getAttackableEnemy(Global g) {
+		return getAttackableEntities(g).stream().filter(entity -> entity.teamId != teamId && entity.teamId != -1)
+				.collect(Collectors.toList());
+	}
+
+	public Entity getClosestAmongList(List<Entity> entities) {
+		double min = 1000000;
+		Entity closestEntity = null;
+
+		for (Entity entity : entities) {
+			double distance = distance(entity);
+			if (distance < min) {
+				closestEntity = entity;
+				min = distance;
+			}
+		}
+		return closestEntity;
+	}
+
+	public double distance(MapObject entity) {
+		return Math.sqrt((position.x - entity.position.x) * (position.x - entity.position.x)
+				+ (position.y - entity.position.y) * (position.y - entity.position.y));
+	}
+}
+
+class Tower extends Entity {
+
+	public Tower(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
+			int movementSpeed) {
+		super(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, UnitType.TOWER);
+	}
+
 }
 
 class Unit extends Entity {
 
-	protected Unit(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
+	public Unit(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
 			int movementSpeed) {
 		super(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, UnitType.UNIT);
 	}
@@ -169,14 +349,26 @@ class Unit extends Entity {
 class Hero extends Entity {
 	HeroType heroType;
 	final int maxMana;
+	final int manaRegeneration;
 	int mana;
 	boolean isVisible;
+	
+	// Time for the turn
+	double timeLeft = 1;
 
-	protected Hero(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
+	public Hero(Hero hero) {
+		this(hero.id, hero.teamId, hero.position.x, hero.position.y, hero.attackRange, hero.health, hero.maxHealth,
+				hero.attackDamage, hero.movementSpeed, hero.mana, hero.maxMana, hero.manaRegeneration,
+				hero.heroType.name(), hero.isVisible ? 1 : 0);
+		timeLeft = hero.timeLeft;
+	}
+
+	public Hero(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
 			int movementSpeed, int mana, int maxMana, int manaRegeneration, String heroType, int isVisible) {
 		super(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, UnitType.HERO);
 		this.heroType = HeroType.valueOf(heroType);
 		this.maxMana = maxMana;
+		this.manaRegeneration = manaRegeneration;
 
 		this.update(x, y, health, mana, isVisible);
 	}
@@ -186,23 +378,23 @@ class Hero extends Entity {
 		this.mana = mana;
 		this.isVisible = isVisible == 1;
 	}
+
+	public List<Entity> getAttackableEntitiesAfterMove() {
+		Hero copyHero = new Hero(this);
+		//TODO
+	}
+	
+	public void simuleMove(Position target) {
+		
+	}
 }
 
-abstract class BushOrSpawn {
-	private Position position;
-	private int radius;
+abstract class BushOrSpawn extends MapObject {
+	int radius;
 
 	public BushOrSpawn(int x, int y, int radius) {
 		this.position = new Position(x, y);
 		this.radius = radius;
-	}
-
-	public Position getPosition() {
-		return position;
-	}
-
-	public int getRadius() {
-		return radius;
 	}
 }
 
@@ -220,14 +412,28 @@ class Spawn extends BushOrSpawn {
 }
 
 final class Play {
+	private static StrategyOrchestrator strategyOrchestrator = new StrategyOrchestrator();
+
+	public static void initTurn(Global g) {
+		// Init all entities as not alive
+		g.initEntities();
+	}
+
+	private static void preparingBeforePlay(Global g) {
+		g.purgeEntities();
+	}
 
 	public static void play(Global g) {
+		preparingBeforePlay(g);
+
 		if (g.heroMovesLeft < 0) {
 			Strategy.playFirstMove();
 		}
 
+		// Orchestrator decide the strategy and play it
 		for (int i = 0; i < g.heroMovesLeft; i++) {
-			Strategy.decideMove(g).playCommand();
+			Hero heroPlaying = g.myTeam.heros.get(i);
+			strategyOrchestrator.decideStrategy(g, heroPlaying).decideMove(g, heroPlaying).playCommand();
 		}
 	}
 }
@@ -361,14 +567,67 @@ class Move {
 	}
 }
 
-final class Strategy {
-	public static Move decideMove(Global g) {
-		return Move.buildMoveAttackNearest(UnitType.TOWER);
+enum StrategyType {
+	BEHIND_UNIT, PROTECT_TOWER
+}
+
+class StrategyOrchestrator {
+	Map<StrategyType, Strategy> strategies = new HashMap<>();
+
+	public StrategyOrchestrator() {
+		strategies.put(StrategyType.BEHIND_UNIT, new StillBehindUnitStrategy());
+		strategies.put(StrategyType.PROTECT_TOWER, new ProtectTowerStrategy());
 	}
+
+	public Strategy decideStrategy(Global g, Hero heroPlaying) {
+		return strategies.get(StrategyType.BEHIND_UNIT);
+	}
+}
+
+abstract class Strategy {
+	public abstract Move decideMove(Global g, Hero hero);
 
 	public static void playFirstMove() {
 		System.out.println(HeroType.DEADPOOL);
 	}
+}
+
+final class StrategyUtile {
+	public static Entity getBestEnemyToBeAttacked(Global g, Hero hero) {
+		List<Entity> enemyEntityToBeAttacked = hero.getAttackableEnemy(g);
+		return hero.getClosestAmongList(enemyEntityToBeAttacked);
+	}
+}
+
+class StillBehindUnitStrategy extends Strategy {
+	@Override
+	public Move decideMove(Global g, Hero hero) {
+		{
+			Entity entityToAttack = StrategyUtile.getBestEnemyToBeAttacked(g, hero);
+
+			if (entityToAttack != null) {
+				return Move.buildMoveAttackId(entityToAttack.id);
+			}
+
+			return Move.buildWaitMove();
+		}
+	}
+}
+
+class ProtectTowerStrategy extends Strategy {
+	@Override
+	public Move decideMove(Global g, Hero hero) {
+		{
+			Entity entityToAttack = StrategyUtile.getBestEnemyToBeAttacked(g, hero);
+
+			if (entityToAttack != null) {
+				return Move.buildMoveAttackId(entityToAttack.id);
+			}
+
+			return Move.buildWaitMove();
+		}
+	}
+
 }
 
 class Player {
