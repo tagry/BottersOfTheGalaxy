@@ -1,5 +1,5 @@
-import java.io.StreamCorruptedException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -193,6 +193,11 @@ class Position {
 
 		return behindPosition;
 	}
+
+	public double distance(Position otherPosition) {
+		return Math.sqrt((this.x - otherPosition.x) * (this.x - otherPosition.x)
+				+ (this.y - otherPosition.y) * (this.y - otherPosition.y));
+	}
 }
 
 class Team {
@@ -201,6 +206,52 @@ class Team {
 	List<Hero> heros = new ArrayList<>();
 	List<Unit> units = new ArrayList<>();
 	Tower tower;
+
+	public boolean hasUnits() {
+		return !units.isEmpty();
+	}
+
+	public Unit getFrontUnit() {
+		if (!hasUnits()) {
+			return null;
+		}
+
+		List<Unit> unitsCopy = new ArrayList<>(units);
+
+		if (tower.position.x < Position.MAX_X / 2) {
+			unitsCopy.sort(new ComparatorGreaterXtoFewer());
+		} else {
+			unitsCopy.sort(new ComparatorFewerXtoGreater());
+		}
+
+		return unitsCopy.get(0);
+	}
+}
+
+class ComparatorFewerXtoGreater implements Comparator<Entity> {
+	@Override
+	public int compare(Entity arg0, Entity arg1) {
+		if (arg0.position.x < arg1.position.x) {
+			return 1;
+		} else if (arg0.position.x > arg1.position.x) {
+			return -1;
+		}
+		return 0;
+	}
+
+}
+
+class ComparatorGreaterXtoFewer implements Comparator<Entity> {
+	@Override
+	public int compare(Entity arg0, Entity arg1) {
+		if (arg0.position.x > arg1.position.x) {
+			return 1;
+		} else if (arg0.position.x < arg1.position.x) {
+			return -1;
+		}
+		return 0;
+	}
+
 }
 
 class Item {
@@ -304,8 +355,8 @@ abstract class Entity extends MapObject {
 	 * @return
 	 */
 	public List<Entity> getAttackableEnemy(Global g) {
-		return getAttackableEntities(g).stream().filter(entity -> entity.teamId != teamId && entity.teamId != -1)
-				.collect(Collectors.toList());
+		List<Entity> attackableEntities = getAttackableEntities(g);
+		return StrategyUtile.getEnemyAmongList(attackableEntities, teamId);
 	}
 
 	public Entity getClosestAmongList(List<Entity> entities) {
@@ -323,8 +374,7 @@ abstract class Entity extends MapObject {
 	}
 
 	public double distance(MapObject entity) {
-		return Math.sqrt((position.x - entity.position.x) * (position.x - entity.position.x)
-				+ (position.y - entity.position.y) * (position.y - entity.position.y));
+		return position.distance(entity.position);
 	}
 }
 
@@ -352,15 +402,11 @@ class Hero extends Entity {
 	final int manaRegeneration;
 	int mana;
 	boolean isVisible;
-	
-	// Time for the turn
-	double timeLeft = 1;
 
 	public Hero(Hero hero) {
 		this(hero.id, hero.teamId, hero.position.x, hero.position.y, hero.attackRange, hero.health, hero.maxHealth,
 				hero.attackDamage, hero.movementSpeed, hero.mana, hero.maxMana, hero.manaRegeneration,
 				hero.heroType.name(), hero.isVisible ? 1 : 0);
-		timeLeft = hero.timeLeft;
 	}
 
 	public Hero(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth, int attackDamage,
@@ -379,13 +425,42 @@ class Hero extends Entity {
 		this.isVisible = isVisible == 1;
 	}
 
-	public List<Entity> getAttackableEntitiesAfterMove() {
-		Hero copyHero = new Hero(this);
-		//TODO
+	public List<Entity> getAttackableEntitiesAfterMove(Global g, Position target) {
+		HeroSimulated copyHero = new HeroSimulated(this);
+		copyHero.simulateMove(target);
+
+		if (copyHero.hasEnoughTimeToAttack()) {
+			return copyHero.getAttackableEntities(g);
+		} else {
+			return null;
+		}
 	}
-	
-	public void simuleMove(Position target) {
-		
+}
+
+class HeroSimulated extends Hero {
+	final static double TIME_TO_ATTACK = 0.1;
+
+	// Time for the turn
+	double timeLeft = 1;
+
+	public HeroSimulated(Hero hero) {
+		super(hero);
+	}
+
+	public void simulateMove(Position target) {
+		double distanceToTarget = position.distance(target);
+		double distanceTravelled = Math.min(this.movementSpeed, distanceToTarget);
+		timeLeft = timeLeft - distanceTravelled / movementSpeed;
+
+		int xAfter = (int) (position.x + (target.x - position.x) * distanceTravelled / distanceToTarget);
+		int yAfter = (int) (position.y + (target.y - position.y) * distanceTravelled / distanceToTarget);
+
+		position.x = xAfter;
+		position.y = yAfter;
+	}
+
+	public boolean hasEnoughTimeToAttack() {
+		return timeLeft > TIME_TO_ATTACK;
 	}
 }
 
@@ -597,19 +672,42 @@ final class StrategyUtile {
 		List<Entity> enemyEntityToBeAttacked = hero.getAttackableEnemy(g);
 		return hero.getClosestAmongList(enemyEntityToBeAttacked);
 	}
+
+	public static List<Entity> getEnemyAmongList(List<Entity> entities, int teamId) {
+		return entities.stream().filter(entity -> entity.teamId != teamId && entity.teamId != -1)
+				.collect(Collectors.toList());
+	}
 }
 
 class StillBehindUnitStrategy extends Strategy {
+	final int DISTANCE_BEHIND_UNITS = 10;
+
 	@Override
 	public Move decideMove(Global g, Hero hero) {
 		{
-			Entity entityToAttack = StrategyUtile.getBestEnemyToBeAttacked(g, hero);
+			Position target = null;
 
-			if (entityToAttack != null) {
-				return Move.buildMoveAttackId(entityToAttack.id);
+			if (g.myTeam.hasUnits()) {
+				// Target position is behind the frontest unit
+				target = g.myTeam.getFrontUnit().position.behindPosition(DISTANCE_BEHIND_UNITS, g.myTeam);
 			}
 
-			return Move.buildWaitMove();
+			// No unit => don't move and attack if possible
+			if (target == null) {
+				Entity bestEnemy = StrategyUtile.getBestEnemyToBeAttacked(g, hero);
+				if (bestEnemy != null) {
+					return Move.buildMoveAttackId(bestEnemy.id);
+				} else {
+					return Move.buildWaitMove();
+				}
+			} else {
+				List<Entity> attackableAfterMove = hero.getAttackableEntitiesAfterMove(g, target);
+				if (!attackableAfterMove.isEmpty()) {
+					return Move.buildMoveAttackMove(target, attackableAfterMove.get(0).id);
+				} else {
+					return Move.buildMoveMove(target);
+				}
+			}
 		}
 	}
 }
