@@ -16,10 +16,10 @@ enum HeroType {
 }
 
 enum MoveType {
-	WAIT("WAIT"), MOVE("MOVE"), ATTACK_ID("ATTACK"), ATTACK_NEAREST("ATTACK_NEAREST"), MOVE_ATTACK("MOVE_ATTACK"), BUY(
-			"BUY"), SELL("SELL");
+	WAIT("WAIT"), MOVE("MOVE"), ATTACK_ID("ATTACK"), ATTACK_NEAREST("ATTACK_NEAREST"), MOVE_ATTACK("MOVE_ATTACK"),
+	BUY("BUY"), SELL("SELL");
 
-	final private String command;
+	private final String command;
 
 	private MoveType(String command) {
 		this.command = command;
@@ -37,6 +37,8 @@ enum MoveType {
  *
  */
 class Global {
+	int turnsPlayed = 0;
+
 	int heroMovesLeft = 0;
 	Team myTeam = new Team();
 	Team hisTeam = new Team();
@@ -67,15 +69,15 @@ class Global {
 			entitiesById.remove(idToBeRemoved);
 		}
 	}
-	
+
 	public void purgeTeamsEntities() {
 		myTeam.units = purgeEntities(myTeam.units);
 		myTeam.heros = purgeEntities(myTeam.heros);
-		
+
 		hisTeam.units = purgeEntities(hisTeam.units);
 		hisTeam.heros = purgeEntities(hisTeam.heros);
 	}
-	
+
 	private <T extends Entity> List<T> purgeEntities(List<T> entities) {
 		return entities.stream().filter(entity -> entity.isAlive).collect(Collectors.toList());
 	}
@@ -108,7 +110,7 @@ class Global {
 	public void updateUnit(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
 			int attackDamage, int movementSpeed) {
 		if (entitiesById.containsKey(id)) {
-			Unit unit = (Unit)entitiesById.get(id);
+			Unit unit = (Unit) entitiesById.get(id);
 			unit.update(x, y, health);
 		} else {
 			Unit newUnit = new Unit(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
@@ -159,6 +161,26 @@ class Global {
 		items.add(new Item(itemName, itemCost, damage, health, maxHealth, mana, maxMana, moveSpeed, manaRegeneration,
 				isPotion));
 	}
+
+	public Team getTeamById(int id) {
+		if (id == myTeam.teamId) {
+			return myTeam;
+		} else if (id == hisTeam.teamId) {
+			return hisTeam;
+		} else {
+			return null;
+		}
+	}
+
+	public Team getEnnemyTeamById(int id) {
+		if (id == myTeam.teamId) {
+			return hisTeam;
+		} else if (id == hisTeam.teamId) {
+			return myTeam;
+		} else {
+			return null;
+		}
+	}
 }
 
 class Position {
@@ -204,7 +226,7 @@ class Position {
 		if (team.tower.position.x < MAX_X / 2) {
 			behindPosition.x = Math.max(0, x - distance);
 		} else {
-			behindPosition.x = Math.min(MAX_X, distance - x);
+			behindPosition.x = Math.min(MAX_X, x + distance);
 		}
 
 		return behindPosition;
@@ -239,8 +261,11 @@ class Team {
 			unitsCopy.sort(new ComparatorGreaterXtoFewer());
 		}
 
-		Play.printErrorLog("Unit frontest:" + unitsCopy.get(0).position.x);
 		return unitsCopy.get(0);
+	}
+
+	public List<Item> getBuyableItems(Global g) {
+		return g.items.stream().filter(item -> item.isBuyable(this)).collect(Collectors.toList());
 	}
 }
 
@@ -296,6 +321,16 @@ class Item {
 		this.isPotion = isPotion == 1;
 	}
 
+	public boolean isBuyable(Team team) {
+		return team.gold >= itemCost;
+	}
+
+	@Override
+	public String toString() {
+		return "Item [itemName=" + itemName + ", itemCost=" + itemCost + ", damage=" + damage + ", health=" + health
+				+ ", maxHealth=" + maxHealth + ", mana=" + mana + ", maxMana=" + maxMana + ", moveSpeed=" + moveSpeed
+				+ ", manaRegeneration=" + manaRegeneration + ", isPotion=" + isPotion + "]";
+	}
 }
 
 abstract class MapObject {
@@ -344,7 +379,7 @@ abstract class Entity extends MapObject {
 	 * @param entity
 	 */
 	public boolean canAttack(Entity entity) {
-		return distance(entity) < attackRange;
+		return distance(entity) <= attackRange;
 	}
 
 	/**
@@ -375,11 +410,11 @@ abstract class Entity extends MapObject {
 		return StrategyUtile.getEnemyAmongList(attackableEntities, teamId);
 	}
 
-	public Entity getClosestAmongList(List<Entity> entities) {
+	public <T extends Entity> T getClosestAmongList(List<T> entities) {
 		double min = 1000000;
-		Entity closestEntity = null;
+		T closestEntity = null;
 
-		for (Entity entity : entities) {
+		for (T entity : entities) {
 			double distance = distance(entity);
 			if (distance < min) {
 				closestEntity = entity;
@@ -443,15 +478,9 @@ class Hero extends Entity {
 
 	public List<Entity> getAttackableEntitiesAfterMove(Global g, Position target) {
 		HeroSimulated copyHero = new HeroSimulated(this);
-		Play.printErrorLog("X : " +copyHero.position.x );
 		copyHero.simulateMove(target);
-Play.printErrorLog("X : " +copyHero.position.x );
 
-		if (copyHero.hasEnoughTimeToAttack()) {
-			return copyHero.getAttackableEntities(g);
-		} else {
-			return new ArrayList<>();
-		}
+		return copyHero.getAttackableEntities(g);
 	}
 }
 
@@ -470,8 +499,8 @@ class HeroSimulated extends Hero {
 		double distanceTravelled = Math.min(this.movementSpeed, distanceToTarget);
 		timeLeft = timeLeft - distanceTravelled / movementSpeed;
 
-		int xAfter = (int) (position.x + (target.x - position.x) * distanceTravelled / distanceToTarget);
-		int yAfter = (int) (position.y + (target.y - position.y) * distanceTravelled / distanceToTarget);
+		int xAfter = position.x + (int) ((target.x - position.x) * distanceTravelled / distanceToTarget);
+		int yAfter = position.y + (int) ((target.y - position.y) * distanceTravelled / distanceToTarget);
 
 		position.x = xAfter;
 		position.y = yAfter;
@@ -531,6 +560,8 @@ final class Play {
 			Hero heroPlaying = g.myTeam.heros.get(i);
 			strategyOrchestrator.decideStrategy(g, heroPlaying).decideMove(g, heroPlaying).playCommand(getLog());
 		}
+
+		g.turnsPlayed++;
 	}
 
 	public static void addLog(String msg) {
@@ -670,18 +701,25 @@ class Move {
 }
 
 enum StrategyType {
-	BEHIND_UNIT, PROTECT_TOWER
+	BEHIND_UNIT, PROTECT_TOWER, BUY_STUFF
 }
 
 class StrategyOrchestrator {
+	private static final int MAX_TURN_TO_BUY = 30;
+
 	Map<StrategyType, Strategy> strategies = new HashMap<>();
 
 	public StrategyOrchestrator() {
 		strategies.put(StrategyType.BEHIND_UNIT, new StillBehindUnitStrategy());
 		strategies.put(StrategyType.PROTECT_TOWER, new ProtectTowerStrategy());
+		strategies.put(StrategyType.BUY_STUFF, new BuyStuffStrategy());
 	}
 
 	public Strategy decideStrategy(Global g, Hero heroPlaying) {
+		if (!g.getTeamById(heroPlaying.teamId).getBuyableItems(g).isEmpty() && g.turnsPlayed < MAX_TURN_TO_BUY) {
+			return strategies.get(StrategyType.BUY_STUFF);
+		}
+
 		return strategies.get(StrategyType.BEHIND_UNIT);
 	}
 }
@@ -695,9 +733,23 @@ abstract class Strategy {
 }
 
 final class StrategyUtile {
-	public static Entity getBestEnemyToBeAttacked(Global g, Hero hero) {
+	public static Entity getClosestEnnemyToBeAttacked(Global g, Hero hero) {
 		List<Entity> enemyEntityToBeAttacked = hero.getAttackableEnemy(g);
 		return hero.getClosestAmongList(enemyEntityToBeAttacked);
+	}
+
+	public static boolean isEnnemyHeroCanReachMe(Global g, Hero hero) {
+		for (Hero heroEnnemy : g.getEnnemyTeamById(hero.teamId).heros) {
+			if (heroEnnemy.canAttack(hero)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	public static Hero getClosestEnnemyHero(Global g, Hero hero) {
+		return hero.getClosestAmongList(g.getEnnemyTeamById(hero.teamId).heros);
 	}
 
 	public static List<Entity> getEnemyAmongList(List<Entity> entities, int teamId) {
@@ -707,15 +759,24 @@ final class StrategyUtile {
 }
 
 class StillBehindUnitStrategy extends Strategy {
-	final int DISTANCE_BEHIND_UNITS = 10;
+	final int DISTANCE_BEHIND_UNITS = 20;
+	final int MIN_DISTANCE_ENNEMY_TOWER_RANGE = 0;
 
 	@Override
 	public Move decideMove(Global g, Hero hero) {
 		{
 			Play.addLog("S:BEHIND");
 
-			Move move = null;
 			Position target = null;
+
+			if (isToCloseOfEnemyTower(g, hero)) {
+				Play.printErrorLog("TO CLOSE");
+				return attackHeroOrCloest(g, hero);
+			}
+
+			if (StrategyUtile.isEnnemyHeroCanReachMe(g, hero)) {
+				return Move.buildMoveAttackNearest(UnitType.HERO);
+			}
 
 			if (g.myTeam.hasUnits()) {
 				// Target position is behind the frontest unit
@@ -723,24 +784,87 @@ class StillBehindUnitStrategy extends Strategy {
 			}
 
 			// No unit => don't move and attack if possible
-			if (target == null) {
-				Entity bestEnemy = StrategyUtile.getBestEnemyToBeAttacked(g, hero);
-				if (bestEnemy != null) {
-					move = Move.buildMoveAttackId(bestEnemy.id);
-				} else {
-					move = Move.buildWaitMove();
-				}
+			if (target == null || isAttackableBeTheEnemyTowerAfterMove(g, hero, target)) {
+				return attackHeroOrCloest(g, hero);
 			} else {
-				List<Entity> attackableAfterMove = hero.getAttackableEntitiesAfterMove(g, target);
-				if (!attackableAfterMove.isEmpty()) {
-					move = Move.buildMoveAttackMove(target, attackableAfterMove.get(0).id);
+				List<Entity> ennemyAttackableAfterMove = StrategyUtile
+						.getEnemyAmongList(hero.getAttackableEntitiesAfterMove(g, target), hero.teamId);
+				if (!ennemyAttackableAfterMove.isEmpty()) {
+					return Move.buildMoveAttackMove(target, ennemyAttackableAfterMove.get(0).id);
 				} else {
-					move = Move.buildMoveMove(target);
+					return Move.buildMoveMove(target);
 				}
 			}
-
-			return move;
 		}
+	}
+
+	private boolean isToCloseOfEnemyTower(Global g, Hero hero) {
+		Tower ennemyTower = g.getEnnemyTeamById(hero.teamId).tower;
+		int ennemyTowerRange = ennemyTower.attackRange;
+
+		HeroSimulated copyHero = new HeroSimulated(hero);
+		copyHero.simulateMove(ennemyTower.position);
+
+		return (copyHero.distance(ennemyTower) - ennemyTowerRange < MIN_DISTANCE_ENNEMY_TOWER_RANGE);
+	}
+
+	private Move attackHeroOrCloest(Global g, Hero hero) {
+		Hero closestEnnemyHero = StrategyUtile.getClosestEnnemyHero(g, hero);
+		if (closestEnnemyHero != null && hero.canAttack(closestEnnemyHero)) {
+			return Move.buildMoveAttackId(closestEnnemyHero.id);
+		} else {
+			Entity closestEnemy = StrategyUtile.getClosestEnnemyToBeAttacked(g, hero);
+			if (closestEnemy != null) {
+				return Move.buildMoveAttackId(closestEnemy.id);
+			} else {
+				return Move.buildWaitMove();
+			}
+		}
+	}
+
+	private boolean isAttackableBeTheEnemyTowerAfterMove(Global g, Hero hero, Position target) {
+		HeroSimulated copyHero = new HeroSimulated(hero);
+		copyHero.simulateMove(target);
+
+		return g.getEnnemyTeamById(copyHero.teamId).tower.canAttack(copyHero);
+	}
+}
+
+class BuyStuffStrategy extends Strategy {
+	@Override
+	public Move decideMove(Global g, Hero hero) {
+		Item bestDamageItemToBuy = bestDamageAmongList(g.getTeamById(hero.teamId).getBuyableItems(g));
+		return Move.buildMoveBuy(bestDamageItemToBuy.itemName);
+	}
+
+	private Item mostExpensiveAmongList(List<Item> items) {
+		int maxCost = -1;
+		Item mostExpensiveItem = null;
+
+		for (Item item : items) {
+			if (item.itemCost > maxCost) {
+				maxCost = item.itemCost;
+				mostExpensiveItem = item;
+			}
+		}
+
+		Play.printErrorLog(mostExpensiveItem.toString());
+		return mostExpensiveItem;
+	}
+
+	private Item bestDamageAmongList(List<Item> items) {
+		int maxDamage = -1;
+		Item bestDamageItem = null;
+
+		for (Item item : items) {
+			if (item.damage > maxDamage) {
+				maxDamage = item.damage;
+				bestDamageItem = item;
+			}
+		}
+
+		Play.printErrorLog(bestDamageItem.toString());
+		return bestDamageItem;
 	}
 }
 
@@ -748,7 +872,7 @@ class ProtectTowerStrategy extends Strategy {
 	@Override
 	public Move decideMove(Global g, Hero hero) {
 		{
-			Entity entityToAttack = StrategyUtile.getBestEnemyToBeAttacked(g, hero);
+			Entity entityToAttack = StrategyUtile.getClosestEnnemyToBeAttacked(g, hero);
 
 			if (entityToAttack != null) {
 				return Move.buildMoveAttackId(entityToAttack.id);
@@ -770,7 +894,7 @@ class Player {
 		Scanner in = new Scanner(System.in);
 		int myTeam = in.nextInt();
 		g.myTeam.teamId = myTeam;
-		g.hisTeam.teamId = (myTeam == 0) ? 1 : 0;
+		g.hisTeam.teamId = (myTeam == 0) ? 0 : 1;
 
 		int bushAndSpawnPointCount = in.nextInt();
 
@@ -850,14 +974,6 @@ class Player {
 
 				}
 			}
-
-			// Write an action using System.out.println()
-			// To debug: System.err.println("Debug messages...");
-
-			// If roundType has a negative value then you need to output a Hero name, such
-			// as "DEADPOOL" or "VALKYRIE".
-			// Else you need to output roundType number of any valid action, such as "WAIT"
-			// or "ATTACK unitId"
 			Play.play(g);
 		}
 	}
