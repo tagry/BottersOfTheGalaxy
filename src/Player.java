@@ -52,7 +52,7 @@ class Global {
 		}
 	}
 
-	public void purgeEntities() {
+	public void purgeEntitiesMap() {
 		List<Integer> listEntitiesToBeRemoved = new ArrayList<>();
 
 		// Find dead entities
@@ -66,6 +66,18 @@ class Global {
 		for (Integer idToBeRemoved : listEntitiesToBeRemoved) {
 			entitiesById.remove(idToBeRemoved);
 		}
+	}
+	
+	public void purgeTeamsEntities() {
+		myTeam.units = purgeEntities(myTeam.units);
+		myTeam.heros = purgeEntities(myTeam.heros);
+		
+		hisTeam.units = purgeEntities(hisTeam.units);
+		hisTeam.heros = purgeEntities(hisTeam.heros);
+	}
+	
+	private <T extends Entity> List<T> purgeEntities(List<T> entities) {
+		return entities.stream().filter(entity -> entity.isAlive).collect(Collectors.toList());
 	}
 
 	public void updateTower(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
@@ -95,16 +107,21 @@ class Global {
 
 	public void updateUnit(int id, int teamId, int x, int y, int attackRange, int health, int maxHealth,
 			int attackDamage, int movementSpeed) {
-		Unit newUnit = new Unit(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
-
-		// Add to global entities map
-		entitiesById.put(id, newUnit);
-
-		// Add to team
-		if (myTeam.teamId == teamId) {
-			myTeam.units.add(newUnit);
+		if (entitiesById.containsKey(id)) {
+			Unit unit = (Unit)entitiesById.get(id);
+			unit.update(x, y, health);
 		} else {
-			hisTeam.units.add(newUnit);
+			Unit newUnit = new Unit(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
+
+			// Add to global entities map
+			entitiesById.put(id, newUnit);
+
+			// Add to team
+			if (myTeam.teamId == teamId) {
+				myTeam.units.add(newUnit);
+			} else {
+				hisTeam.units.add(newUnit);
+			}
 		}
 	}
 
@@ -113,7 +130,7 @@ class Global {
 			int isVisible) {
 		if (entitiesById.containsKey(id)) {
 			Hero hero = (Hero) entitiesById.get(id);
-			hero.update(maxMana, y, maxHealth, manaRegeneration, isVisible);
+			hero.update(x, y, health, mana, isVisible);
 		} else {
 			addNewHero(id, teamId, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, mana, maxMana,
 					manaRegeneration, heroType, isVisible);
@@ -184,11 +201,10 @@ class Position {
 	 */
 	public Position behindPosition(int distance, Team team) {
 		Position behindPosition = new Position(x, y);
-
 		if (team.tower.position.x < MAX_X / 2) {
-			behindPosition.x = Math.min(0, x - distance);
+			behindPosition.x = Math.max(0, x - distance);
 		} else {
-			behindPosition.x = Math.max(MAX_X, distance - x);
+			behindPosition.x = Math.min(MAX_X, distance - x);
 		}
 
 		return behindPosition;
@@ -217,13 +233,13 @@ class Team {
 		}
 
 		List<Unit> unitsCopy = new ArrayList<>(units);
-
 		if (tower.position.x < Position.MAX_X / 2) {
-			unitsCopy.sort(new ComparatorGreaterXtoFewer());
-		} else {
 			unitsCopy.sort(new ComparatorFewerXtoGreater());
+		} else {
+			unitsCopy.sort(new ComparatorGreaterXtoFewer());
 		}
 
+		Play.printErrorLog("Unit frontest:" + unitsCopy.get(0).position.x);
 		return unitsCopy.get(0);
 	}
 }
@@ -427,12 +443,14 @@ class Hero extends Entity {
 
 	public List<Entity> getAttackableEntitiesAfterMove(Global g, Position target) {
 		HeroSimulated copyHero = new HeroSimulated(this);
+		Play.printErrorLog("X : " +copyHero.position.x );
 		copyHero.simulateMove(target);
+Play.printErrorLog("X : " +copyHero.position.x );
 
 		if (copyHero.hasEnoughTimeToAttack()) {
 			return copyHero.getAttackableEntities(g);
 		} else {
-			return null;
+			return new ArrayList<>();
 		}
 	}
 }
@@ -488,14 +506,17 @@ class Spawn extends BushOrSpawn {
 
 final class Play {
 	private static StrategyOrchestrator strategyOrchestrator = new StrategyOrchestrator();
+	private static String log = null;
 
 	public static void initTurn(Global g) {
 		// Init all entities as not alive
 		g.initEntities();
+		resetLog();
 	}
 
 	private static void preparingBeforePlay(Global g) {
-		g.purgeEntities();
+		g.purgeEntitiesMap();
+		g.purgeTeamsEntities();
 	}
 
 	public static void play(Global g) {
@@ -508,8 +529,28 @@ final class Play {
 		// Orchestrator decide the strategy and play it
 		for (int i = 0; i < g.heroMovesLeft; i++) {
 			Hero heroPlaying = g.myTeam.heros.get(i);
-			strategyOrchestrator.decideStrategy(g, heroPlaying).decideMove(g, heroPlaying).playCommand();
+			strategyOrchestrator.decideStrategy(g, heroPlaying).decideMove(g, heroPlaying).playCommand(getLog());
 		}
+	}
+
+	public static void addLog(String msg) {
+		if (log == null) {
+			log = msg;
+		} else {
+			log = log + " | " + msg;
+		}
+	}
+
+	public static void printErrorLog(String msg) {
+		System.err.println(msg);
+	}
+
+	public static void resetLog() {
+		log = null;
+	}
+
+	public static String getLog() {
+		return log;
 	}
 }
 
@@ -519,8 +560,6 @@ class Move {
 	int unitId = -1;
 	UnitType unitType = null;
 	String itemName = null;
-
-	String msgToPrint = null;
 
 	private Move() {
 	};
@@ -584,16 +623,8 @@ class Move {
 		return move;
 	}
 
-	public void addMessage(String msg) {
-		if (this.msgToPrint == null) {
-			msgToPrint = msg;
-		} else {
-			msgToPrint = msgToPrint + " | " + msg;
-		}
-	}
-
-	public void playCommand() {
-		System.out.println(command());
+	public void playCommand(String log) {
+		System.out.println(command() + ";" + log);
 	}
 
 	private String command() {
@@ -632,10 +663,6 @@ class Move {
 			System.err.println("ERROR not Move Type !");
 			command = MoveType.WAIT.command();
 			break;
-		}
-
-		if (msgToPrint != null) {
-			command = command + ";" + msgToPrint;
 		}
 
 		return command;
@@ -685,6 +712,9 @@ class StillBehindUnitStrategy extends Strategy {
 	@Override
 	public Move decideMove(Global g, Hero hero) {
 		{
+			Play.addLog("S:BEHIND");
+
+			Move move = null;
 			Position target = null;
 
 			if (g.myTeam.hasUnits()) {
@@ -696,18 +726,20 @@ class StillBehindUnitStrategy extends Strategy {
 			if (target == null) {
 				Entity bestEnemy = StrategyUtile.getBestEnemyToBeAttacked(g, hero);
 				if (bestEnemy != null) {
-					return Move.buildMoveAttackId(bestEnemy.id);
+					move = Move.buildMoveAttackId(bestEnemy.id);
 				} else {
-					return Move.buildWaitMove();
+					move = Move.buildWaitMove();
 				}
 			} else {
 				List<Entity> attackableAfterMove = hero.getAttackableEntitiesAfterMove(g, target);
 				if (!attackableAfterMove.isEmpty()) {
-					return Move.buildMoveAttackMove(target, attackableAfterMove.get(0).id);
+					move = Move.buildMoveAttackMove(target, attackableAfterMove.get(0).id);
 				} else {
-					return Move.buildMoveMove(target);
+					move = Move.buildMoveMove(target);
 				}
 			}
+
+			return move;
 		}
 	}
 }
@@ -775,6 +807,7 @@ class Player {
 
 		// game loop
 		while (true) {
+			Play.initTurn(g);
 			int gold = in.nextInt();
 			int enemyGold = in.nextInt();
 			g.myTeam.gold = gold;
@@ -807,12 +840,12 @@ class Player {
 				int itemsOwned = in.nextInt(); // useful from wood1
 
 				if (unitType.equals(UnitType.UNIT.name())) {
-
+					g.updateUnit(unitId, team, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
 				} else if (unitType.equals(UnitType.HERO.name())) {
 					g.updateHero(unitId, team, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed, mana,
 							maxMana, manaRegeneration, heroType, isVisible);
 				} else if (unitType.equals(UnitType.TOWER.name())) {
-
+					g.updateTower(unitId, team, x, y, attackRange, health, maxHealth, attackDamage, movementSpeed);
 				} else if (unitType.equals(UnitType.GROOT.name())) {
 
 				}
